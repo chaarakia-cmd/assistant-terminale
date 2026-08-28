@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Indique au navigateur que la page est en français
 st.markdown('<html lang="fr"></html>', unsafe_allow_html=True)
 
 DATA_FILE = "devoirs_data.json"
@@ -90,7 +89,6 @@ def IA_analyser_et_etaler(description, matiere, date_echeance_str):
     fichiers_cours = st.session_state.app_data["dossiers_matieres"].get(matiere, [])
     nb_fichiers = len(fichiers_cours)
 
-    # Si c'est un simple exercice, 1 seule séance
     if "exo" in desc_lower or "exercice" in desc_lower or etoiles <= 2:
         nb_seances = 1
     else:
@@ -122,11 +120,17 @@ menu = st.sidebar.radio("Menu :", [
     "🎤 Espace Grand Oral"
 ])
 
-# CLE API GEMINI
+# CLE API GEMINI AUTOMATIQUE
 st.sidebar.divider()
-st.sidebar.subheader("🔑 Clé API Gemini (Gratuite)")
-api_key = st.sidebar.text_input("Colle ta clé API Gemini :", type="password", key="gemini_key")
-st.sidebar.caption("[Obtenir une clé gratuite sur Google AI Studio](https://aistudio.google.com/)")
+st.sidebar.subheader("🔑 Clé API Gemini")
+
+# Récupère automatiquement la clé dans les Secrets de Streamlit s'il y en a une
+api_key = st.secrets.get("GEMINI_API_KEY") or st.sidebar.text_input("Colle ta clé API Gemini :", type="password", key="gemini_key")
+
+if st.secrets.get("GEMINI_API_KEY"):
+    st.sidebar.success("Clé API active ✔️")
+else:
+    st.sidebar.caption("Saisis ta clé ou enregistre-la dans les Secrets Streamlit.")
 
 # BOUTON JOKER
 st.sidebar.divider()
@@ -249,7 +253,7 @@ if menu == "🗓️ Agenda & Planning de l'App":
                     st.caption("Libre")
 
     with tab_annee:
-        st.subheader(" Vision Globale des semaines de l'année")
+        st.subheader("Vision Globale des semaines de l'année")
         semaine_offset = st.slider("Sélectionner une semaine dans l'année (S+1 à S+40) :", 1, 40, 1)
         target_date = date.today() + timedelta(weeks=semaine_offset)
         st.write(f"**Échéances prévues autour du {target_date.strftime('%d/%m/%Y')} :**")
@@ -263,9 +267,9 @@ if menu == "🗓️ Agenda & Planning de l'App":
         if not trouve_futur:
             st.info("Aucune grosse échéance enregistrée pour cette période.")
 
-# --- 2. IMPORT CAPTURE PRONOTE (IA GEMINI INTÉGRÉE) ---
+# --- 2. IMPORT CAPTURE PRONOTE (IA GEMINI) ---
 elif menu == "📷 Importer Capture Pronote (IA Gemini)":
-    st.title("📷 Importation & Analyse Intelligent par Capture Pronote")
+    st.title("📷 Importation & Analyse Intelligente par Capture Pronote")
     st.write("Dépose ici ta capture d'écran Pronote. L'IA analyse l'image, filtre les doublons et organise ton travail selon tes limites.")
 
     fichier_image = st.file_uploader("Sélectionner la capture Pronote (PNG, JPG)", type=["png", "jpg", "jpeg"])
@@ -284,7 +288,7 @@ elif menu == "📷 Importer Capture Pronote (IA Gemini)":
 
         if st.button("🚀 Analyser avec l'IA Gemini et enregistrer", use_container_width=True):
             if not api_key:
-                st.error("⚠️ Merci d'entrer ta clé API Gemini dans le menu latéral à gauche !")
+                st.error("⚠️ Clé API introuvable. Configure-la dans les Secrets Streamlit ou dans le menu latéral.")
             else:
                 with st.spinner("L'IA Gemini analyse l'image, supprime les doublons et évalue la charge..."):
                     try:
