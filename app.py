@@ -1,135 +1,458 @@
 import streamlit as st
-import google.generativeai as genai
+import json
+import os
+import time
+import uuid
+from datetime import datetime, date, timedelta
 from PIL import Image
-import datetime
+import google.generativeai as genai
 
-# Configuration de la page
 st.set_page_config(
-    page_title="Mon Assistant de Terminale - Complet & Intelligent",
+    page_title="Mon Assistant de Terminale",
     page_icon="🎓",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- MENU LATÉRAL ---
-st.sidebar.title("📚 Navigation")
-menu = st.sidebar.selectbox(
-    "Choisir une option :",
-    [
-        "📅 Ce qu'il faut faire aujourd'hui", 
-        "🗓️ Agenda Annuel (Toutes les semaines)", 
-        "📸 IA & Analyse Pronote (Planning intelligent)", 
-        "📖 Manuel & Cours", 
-        "🎓 Parcoursup", 
-        "📂 Suivi par matières", 
-        "🎤 Grand Oral"
-    ]
-)
+# Indique au navigateur que la page est en français
+st.markdown('<html lang="fr"></html>', unsafe_allow_html=True)
 
-# Configuration de la clé API pour l'IA dans la barre latérale
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔑 Connexion IA (Gemini)")
-api_key = st.sidebar.text_input("Entre ta clé API Google Gemini :", type="password")
-st.sidebar.markdown("[Obtenir une clé gratuite sur Google AI Studio](https://aistudio.google.com/)")
+DATA_FILE = "devoirs_data.json"
 
-# --- 1. ACCUEIL : CE QU'IL FAUT FAIRE AUJOURD'HUI ---
-if menu == "📅 Ce qu'il faut faire aujourd'hui":
-    st.title("🎯 Au programme aujourd'hui")
-    st.write("Voici ta charge de travail du jour, calculée pour respecter tes limites (max 2h30 en semaine avec marge).")
-    st.info("💡 Astuce : Importe ta capture Pronote dans l'onglet dédié pour que l'IA remplisse ton agenda automatiquement !")
-
-# --- 2. AGENDA ANNUEL (VISIBILITÉ SUR TOUTE L'ANNÉE) ---
-elif menu == "🗓️ Agenda Annuel (Toutes les semaines)":
-    st.title("🗓️ Agenda Complet de l'Année")
-    st.write("Visualise toutes les semaines de ton année scolaire, même pour les devoirs prévus dans plusieurs mois.")
-
-    # Génération d'une vue par semaines sur plusieurs mois (ex: 36 semaines de l'année scolaire)
-    date_debut = datetime.date(2026, 9, 1) # Début d'année scolaire type
+# --- CHARGEMENT & SAUVEGARDE ---
+def charger_donnees():
+    structure_defaut = {
+        "devoirs": [],
+        "dossiers_matieres": {
+            "📐 Spé Maths": [],
+            "🧪 Spé Physique-Chimie": [],
+            "🔢 Option Maths Expertes": [],
+            "🧠 Philosophie": [],
+            "📜 Histoire-Géo": [],
+            "🔬 Enseignement Scientifique": [],
+            "🇬🇧 Anglais (LVA)": [],
+            "🇪🇸 Espagnol (LVB)": [],
+            "🏃 EPS": [],
+            "⚖️ EMC": [],
+            "🎓 Grand Oral": [],
+            "📝 Bac Blanc": [],
+            "📌 Autre": []
+        },
+        "parcoursup": [],
+        "grand_oral": {"q1_titre": "", "q1_plan": "", "q2_titre": "", "q2_plan": ""}
+    }
     
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        semaine_selectionnee = st.selectbox(
-            "Choisis une semaine à consulter :",
-            [f"Semaine {i} (À partir du {date_debut + datetime.timedelta(weeks=i-1)})" for i in range(1, 40)]
-        )
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    for cle in structure_defaut:
+                        if cle not in data:
+                            data[cle] = structure_defaut[cle]
+                    
+                    for v in data.get("parcoursup", []):
+                        if "id" not in v:
+                            v["id"] = str(uuid.uuid4())
+                            
+                    return data
+                elif isinstance(data, list):
+                    structure_defaut["devoirs"] = data
+                    return structure_defaut
+        except Exception:
+            return structure_defaut
+    return structure_defaut
+
+def sauvegarder_donnees():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(st.session_state.app_data, f, ensure_ascii=False, indent=4)
+
+if "app_data" not in st.session_state:
+    st.session_state.app_data = charger_donnees()
+
+# --- ALGORITHME IA : ANALYSE ET ÉTALEMENT INTELLIGENT ---
+def IA_analyser_et_etaler(description, matiere, date_echeance_str):
+    desc_lower = description.lower()
     
-    with col2:
-        st.subheader(f"📌 Détails pour : {semaine_selectionnee}")
-        st.markdown("""
-        * **Lundi :** Rien de prévu pour l'instant (ou charge légère)
-        * **Mardi :** Exercice de Maths (fait en 1 soirée)
-        * **Mercredi :** Fiches de révision Philosophie
-        * **Jeudi :** -
-        * **Vendredi :** -
-        * **Week-end (3-4h max + 1h marge) :** Avancée sur le projet de Spé / Grand Oral.
-        """)
+    mots_lourds = ["bac blanc", "ds", "dm", "dme", "chapitre", "synthèse", "grand oral", "contrôle"]
+    etoiles = 2
+    if any(m in desc_lower for m in mots_lourds):
+        etoiles += 2
+        
+    date_echeance = datetime.strptime(str(date_echeance_str), "%Y-%m-%d").date()
+    aujourdhui = date.today()
+    jours_restants = max(1, (date_echeance - aujourdhui).days)
+
+    if jours_restants <= 2:
+        etoiles += 1
+    etoiles = min(5, max(1, etoiles))
+
+    fichiers_cours = st.session_state.app_data["dossiers_matieres"].get(matiere, [])
+    nb_fichiers = len(fichiers_cours)
+
+    # Si c'est un simple exercice, 1 seule séance
+    if "exo" in desc_lower or "exercice" in desc_lower or etoiles <= 2:
+        nb_seances = 1
+    else:
+        nb_seances = 3 if etoiles >= 3 and jours_restants >= 3 else (2 if jours_restants >= 2 else 1)
+        
+    pas = max(1, jours_restants // nb_seances)
     
-    st.markdown("---")
-    st.write("🔍 *Tu peux anticiper n'importe quel devoir ou DS à venir dans 1 mois, 2 mois ou 4 mois grâce à cette vue globale.*")
+    seances = []
+    curr = aujourdhui
+    for i in range(nb_seances):
+        if curr <= date_echeance:
+            info_ext = f" (Inclus {nb_fichiers} cours du dossier)" if nb_fichiers > 0 else ""
+            seances.append({
+                "date": str(curr),
+                "detail": f"Séance {i+1}/{nb_seances}{info_ext}"
+            })
+            curr += timedelta(days=pas)
 
-# --- 3. IA & ANALYSE PRONOTE (AVEC VRAI RAISONNEMENT) ---
-elif menu == "📸 IA & Analyse Pronote (Planning intelligent)":
-    st.title("🤖 Planificateur IA Intelligent (Pronote & Contraintes)")
-    st.markdown("""
-    **Règles strictes intégrées à l'IA :**
-    * 🛑 **Anti-doublons & Lecture d'image :** Analyse des matières et suppression des doublons.
-    * ⏰ **Gestion du temps :** Max **2h30 en semaine** (2h + 30 min de marge), **3 à 4h le week-end** (avec 1h de marge).
-    * 🧠 **Répartition sur-mesure :** 
-      - Un exercice simple = fait en **une seule soirée** (pas d'étalement inutile).
-      - Pas de report absurde d'un devoir lointain sur un soir déjà plein.
-      - Découpage des chapitres de DS selon **leur nombre réel de parties** (1, 2, 4...).
-      - Révision générale placée **idéalement la veille ou 2 jours avant le DS** (et jusqu'à 3 jours avant maximum en cas de saturation).
-    """)
+    return etoiles, seances
 
-    uploaded_file = st.file_uploader("📸 Importe ta capture d'écran Pronote (PNG, JPG)", type=["png", "jpg", "jpeg"])
+# --- NAVIGATION LATÉRALE ---
+st.sidebar.title("🎓 Mon Espace Terminale")
+menu = st.sidebar.radio("Menu :", [
+    "🗓️ Agenda & Planning de l'App",
+    "📷 Importer Capture Pronote (IA Gemini)",
+    "➕ Ajouter Devoir / Révision (IA)",
+    "📂 Dossiers Matériels & Bac Blanc",
+    "🎯 Suivi Parcoursup",
+    "🎤 Espace Grand Oral"
+])
 
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Capture Pronote importée", use_column_width=True)
+# CLE API GEMINI
+st.sidebar.divider()
+st.sidebar.subheader("🔑 Clé API Gemini (Gratuite)")
+api_key = st.sidebar.text_input("Colle ta clé API Gemini :", type="password", key="gemini_key")
+st.sidebar.caption("[Obtenir une clé gratuite sur Google AI Studio](https://aistudio.google.com/)")
 
-        if st.button("🚀 Lancer l'analyse intelligente et générer l'agenda"):
+# BOUTON JOKER
+st.sidebar.divider()
+st.sidebar.subheader("🛟 Urgence Fatigué")
+if st.sidebar.button("😴 BOUTON JOKER : Soirée KO !", use_container_width=True):
+    demain = str(date.today() + timedelta(days=1))
+    for d in st.session_state.app_data["devoirs"]:
+        if not d.get("fait", False):
+            d["date_limite"] = demain
+            if "seances" in d:
+                for s in d["seances"]:
+                    if s["date"] == str(date.today()):
+                        s["date"] = demain
+    sauvegarder_donnees()
+    st.sidebar.success("Toutes tes tâches du soir sont décalées à demain !")
+    st.rerun()
+
+# --- 1. AGENDA INTÉGRÉ ---
+if menu == "🗓️ Agenda & Planning de l'App":
+    st.title("🗓️ Mon Agenda Intégré")
+    
+    devoirs = st.session_state.app_data["devoirs"]
+    aujourdhui_str = str(date.today())
+    
+    taches_soir = [d for d in devoirs if not d.get("fait", False) and 
+                   (d.get("date_limite") == aujourdhui_str or any(s["date"] == aujourdhui_str for s in d.get("seances", [])))]
+    total_etoiles = sum(d["etoiles"] for d in taches_soir)
+
+    col_m, col_p = st.columns(2)
+    with col_m:
+        st.subheader("📊 Météo du soir")
+        if not taches_soir:
+            st.success("🟢 Aucune révision prévue ce soir !")
+        elif total_etoiles <= 4:
+            st.success(f"🟢 Soirée Tranquille — {total_etoiles} ⭐ (Charge respectée : < 2h30)")
+        elif total_etoiles <= 8:
+            st.info(f"🟡 Soirée Standard — {total_etoiles} ⭐ (Environ 2h - 2h30)")
+        else:
+            st.warning(f"🟠 Grosse Soirée — {total_etoiles} ⭐ (Attention au dépassement)")
+
+    with col_p:
+        st.subheader("⏱️ Minuteur Focus")
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            mins = st.number_input("Minutes", 1, 120, 25, label_visibility="collapsed")
+        with c2:
+            lancer = st.button("🚀 Lancer", use_container_width=True)
+        
+        if lancer:
+            total_sec = mins * 60
+            barre = st.progress(0)
+            texte_chrono = st.empty()
+            
+            for s in range(total_sec, -1, -1):
+                m, sec = divmod(s, 60)
+                texte_chrono.markdown(f"### ⏳ **{m:02d}:{sec:02d}**")
+                barre.progress((total_sec - s) / total_sec)
+                time.sleep(1)
+                
+            texte_chrono.markdown("### 🎉 **Session terminée !**")
+            st.balloons()
+
+    st.divider()
+
+    tab_jour, tab_semaine, tab_annee = st.tabs(["📅 Vue Jour par Jour", "🗓️ Planning 7 Jours", "📅 Vision Globale (Année)"])
+
+    with tab_jour:
+        date_sel = st.date_input("Consulter le calendrier à la date du :", date.today())
+        date_sel_str = str(date_sel)
+        st.subheader(f"Programme du {date_sel.strftime('%d/%m/%Y')}")
+
+        taches_trouvees = []
+        for d in devoirs:
+            est_rendu = d.get("date_limite") == date_sel_str
+            seance_match = next((s for s in d.get("seances", []) if s["date"] == date_sel_str), None)
+            if est_rendu or seance_match:
+                taches_trouvees.append((d, est_rendu, seance_match))
+
+        if not taches_trouvees:
+            st.info("Aucune tâche ni révision planifiée pour ce jour.")
+        else:
+            for idx, (d, est_rendu, seance) in enumerate(taches_trouvees):
+                badge = "🎯 RENDU FINAL" if est_rendu else f"📖 {seance['detail']}"
+                st.markdown(f"### {badge} : [{d['matiere']}] {d['description']}")
+                st.caption(f"Difficulté : {'⭐'*d['etoiles']} | Rendu final : {d.get('date_limite')}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    lbl = "Marquer À faire" if d.get("fait") else "Marquer Fait ✔️"
+                    if st.button(lbl, key=f"vj_f_{idx}_{d['description']}"):
+                        d["fait"] = not d.get("fait", False)
+                        sauvegarder_donnees()
+                        st.rerun()
+                with col2:
+                    if st.button("🗑️ Supprimer", key=f"vj_d_{idx}_{d['description']}"):
+                        st.session_state.app_data["devoirs"].remove(d)
+                        sauvegarder_donnees()
+                        st.rerun()
+                st.divider()
+
+    with tab_semaine:
+        st.subheader("Visualisation des 7 prochains jours")
+        jours = [date.today() + timedelta(days=i) for i in range(7)]
+        cols = st.columns(7)
+        for i, j_date in enumerate(jours):
+            j_str = str(j_date)
+            with cols[i]:
+                st.markdown(f"**{j_date.strftime('%a %d/%m')}**")
+                st.divider()
+                count = 0
+                for d in devoirs:
+                    in_seance = any(s["date"] == j_str for s in d.get("seances", []))
+                    in_rendu = d.get("date_limite") == j_str
+                    if in_seance or in_rendu:
+                        icon = "🎯" if in_rendu else "📖"
+                        st.caption(f"{'✔️' if d.get('fait') else '📌'} {icon} **{d['matiere']}**")
+                        st.text(d['description'][:15] + "...")
+                        count += 1
+                if count == 0:
+                    st.caption("Libre")
+
+    with tab_annee:
+        st.subheader(" Vision Globale des semaines de l'année")
+        semaine_offset = st.slider("Sélectionner une semaine dans l'année (S+1 à S+40) :", 1, 40, 1)
+        target_date = date.today() + timedelta(weeks=semaine_offset)
+        st.write(f"**Échéances prévues autour du {target_date.strftime('%d/%m/%Y')} :**")
+        
+        trouve_futur = False
+        for d in devoirs:
+            d_date = datetime.strptime(d.get("date_limite"), "%Y-%m-%d").date()
+            if abs((d_date - target_date).days) <= 3:
+                st.write(f"- 📌 **[{d['matiere']}]** {d['description']} (Date de rendu : {d['date_limite']})")
+                trouve_futur = True
+        if not trouve_futur:
+            st.info("Aucune grosse échéance enregistrée pour cette période.")
+
+# --- 2. IMPORT CAPTURE PRONOTE (IA GEMINI INTÉGRÉE) ---
+elif menu == "📷 Importer Capture Pronote (IA Gemini)":
+    st.title("📷 Importation & Analyse Intelligent par Capture Pronote")
+    st.write("Dépose ici ta capture d'écran Pronote. L'IA analyse l'image, filtre les doublons et organise ton travail selon tes limites.")
+
+    fichier_image = st.file_uploader("Sélectionner la capture Pronote (PNG, JPG)", type=["png", "jpg", "jpeg"])
+    matieres = list(st.session_state.app_data["dossiers_matieres"].keys())
+
+    if fichier_image:
+        image = Image.open(fichier_image)
+        st.image(image, caption="Capture chargée", use_container_width=True)
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            matiere_sel = st.selectbox("Matière concernée", matieres)
+            type_import = st.radio("Type de document", ["Devoir / DS à faire", "Cours / Chapitre à classer"])
+        with c2:
+            date_echeance = st.date_input("Date de rendu / Examen", date.today() + timedelta(days=3))
+
+        if st.button("🚀 Analyser avec l'IA Gemini et enregistrer", use_container_width=True):
             if not api_key:
-                st.error("⚠️ Merci d'entrer ta clé API Gemini dans la barre latérale à gauche pour activer l'intelligence artificielle !")
+                st.error("⚠️ Merci d'entrer ta clé API Gemini dans le menu latéral à gauche !")
             else:
-                with st.spinner("L'IA analyse ton image, supprime les doublons et structure ton planning selon tes règles de temps..."):
+                with st.spinner("L'IA Gemini analyse l'image, supprime les doublons et évalue la charge..."):
                     try:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         
-                        prompt = """
-                        Agis en tant qu'assistant de révision expert et intelligent pour un élève de Terminale. 
-                        Analyse cette capture d'écran Pronote en respectant scrupuleusement ces règles de logique :
-                        1. Extrais les devoirs, exercices et DS en éliminant proprement les doublons.
-                        2. Respecte les limites de temps strictes : max 2h30 par soir en semaine (2h + 30 min de marge) et 3 à 4h le week-end (avec 1h de marge).
-                        3. Pour les exercices simples : planifie-les sur une seule et unique soirée adaptée, sans les étaler bêtement sur plusieurs jours. Ne surcharge pas un soir si un devoir lointain peut être placé sur un jour plus creux ou le week-end.
-                        4. Pour les DS et chapitres : analyse le volume ou le type de chapitre. Ne fais pas un découpage fixe à 4 parties par défaut : adapte le nombre de sessions de révision au nombre réel de parties du chapitre (qu'il y en ait 1, 2 ou plus).
-                        5. Pour la révision finale du DS : place-la idéalement la veille ou 2 jours avant le DS. N'utilise le délai de 3 jours avant qu'en cas de saturation absolue des soirs juste avant.
-                        Donne un planning clair, structuré et intelligent, rédigé entièrement en français.
+                        prompt = f"""
+                        Analyse cette capture Pronote pour un élève de Terminale.
+                        1. Extrais le texte exact des devoirs ou cours sans doublons.
+                        2. Respecte les limites de temps : max 2h30 par soir en semaine (avec 30 min de marge) et 3 à 4h le week-end.
+                        3. Si c'est un simple exercice, mets-le sur une seule soirée adaptée.
+                        4. Si c'est un DS, adapte la révision au nombre réel de parties du chapitre et place la révision finale idéalement la veille ou 2 jours avant.
+                        Donne une description synthétique et claire en français.
                         """
-                        
                         response = model.generate_content([prompt, image])
-                        
-                        st.success("✅ Planning intelligent généré avec succès par l'IA !")
-                        st.markdown(response.text)
-                        
+                        texte_analyse = response.text
+
+                        st.markdown("### 🤖 Résultat de l'analyse IA :")
+                        st.write(texte_analyse)
+
+                        if type_import == "Devoir / DS à faire":
+                            etoiles, seances = IA_analyser_et_etaler(texte_analyse, matiere_sel, str(date_echeance))
+                            st.session_state.app_data["devoirs"].append({
+                                "matiere": matiere_sel,
+                                "description": texte_analyse[:100] + "...",
+                                "etoiles": etoiles,
+                                "fait": False,
+                                "date_limite": str(date_echeance),
+                                "seances": seances
+                            })
+                            sauvegarder_donnees()
+                            st.success("✅ Devoir analysé par l'IA et ajouté dans ton agenda !")
+                        else:
+                            st.session_state.app_data["dossiers_matieres"][matiere_sel].append({
+                                "titre": f"Import IA - {date.today().strftime('%d/%m')}",
+                                "contenu": texte_analyse,
+                                "date_ajout": str(date.today())
+                            })
+                            sauvegarder_donnees()
+                            st.success(f"✅ Cours analysé et classé dans le dossier {matiere_sel} !")
+
                     except Exception as e:
-                        st.error(f"Une erreur est survenue lors de la communication avec l'IA : {e}")
+                        st.error(f"Erreur lors de l'analyse IA : {e}")
 
-# --- 4. MANUEL & COURS ---
-elif menu == "📖 Manuel & Cours":
-    st.title("📖 Manuel & Cours de Terminale")
-    st.write("Retrouve ici tes cours structurés par chapitres.")
+# --- 3. AJOUT MANUEL (IA) ---
+elif menu == "➕ Ajouter Devoir / Révision (IA)":
+    st.title("🤖 Ajout Manuel & Découpage IA")
+    matieres = list(st.session_state.app_data["dossiers_matieres"].keys())
 
-# --- 5. PARCOURSUP ---
-elif menu == "🎓 Parcoursup":
-    st.title("🎓 Espace Parcoursup")
-    st.write("Suivi de tes voeux, de tes lettres de motivation et du calendrier.")
+    with st.form("form_ia"):
+        c1, c2 = st.columns(2)
+        with c1:
+            matiere = st.selectbox("Matière", matieres)
+            description = st.text_input("Description (ex: Exo 45 p 102 ou DS Chapitre 2)")
+        with c2:
+            date_echeance = st.date_input("Date de rendu / Examen", date.today() + timedelta(days=4))
+        
+        submitted = st.form_submit_button("🤖 Générer et Étaler")
 
-# --- 6. SUIVI PAR MATIÈRES ---
-elif menu == "📂 Suivi par matières":
-    st.title("📂 Devoirs et révisions par matières")
-    st.write("Fais le point matière par matière (Maths, Physique, Philo, etc.).")
+    if submitted and description:
+        etoiles, seances = IA_analyser_et_etaler(description, matiere, str(date_echeance))
+        st.session_state.app_data["devoirs"].append({
+            "matiere": matiere,
+            "description": description,
+            "etoiles": etoiles,
+            "fait": False,
+            "date_limite": str(date_echeance),
+            "seances": seances
+        })
+        sauvegarder_donnees()
+        st.success("Tâche ajoutée et planifiée !")
+        st.rerun()
 
-# --- 7. GRAND ORAL ---
-elif menu == "🎤 Grand Oral":
-    st.title("🎤 Préparation du Grand Oral")
-    st.write("Suivi de tes deux questions, de ton argumentaire et de ta soutenance.")
+# --- 4. DOSSIERS MATÉRIELS & ARCHIVES BAC BLANC ---
+elif menu == "📂 Dossiers Matériels & Bac Blanc":
+    st.title("📂 Dossiers de Révision & Prépa Bac Blanc")
+
+    st.subheader("📚 Consultation des cours enregistrés")
+    matieres = list(st.session_state.app_data["dossiers_matieres"].keys())
+    mat_sel = st.selectbox("Sélectionner la matière à réviser", matieres)
+    
+    docs = st.session_state.app_data["dossiers_matieres"].get(mat_sel, [])
+    if docs:
+        for idx, d in enumerate(docs):
+            with st.expander(f"📄 {d['titre']} (Ajouté le {d['date_ajout']})"):
+                st.write(d["contenu"])
+    else:
+        st.info("Aucun cours enregistré pour cette matière.")
+
+    st.divider()
+    st.subheader("📝 Récapitulatif de révision pour le Bac Blanc")
+    for mat, liste_docs in st.session_state.app_data["dossiers_matieres"].items():
+        if liste_docs:
+            st.markdown(f"#### 📘 {mat}")
+            for doc in liste_docs:
+                st.checkbox(f"Révisé : {doc['titre']}", key=f"bb_chk_{mat}_{doc['titre']}")
+
+# --- 5. PARCOURSUP TRACKER ---
+elif menu == "🎯 Suivi Parcoursup":
+    st.title("🎯 Suivi des Vœux Parcoursup")
+
+    with st.form("form_p"):
+        voeu = st.text_input("Nom de la formation / École / CPGE")
+        if st.form_submit_button("Ajouter ce vœu") and voeu:
+            st.session_state.app_data["parcoursup"].append({
+                "id": str(uuid.uuid4()),
+                "voeu": voeu,
+                "projet_motive": False,
+                "pieces": False,
+                "confirme": False
+            })
+            sauvegarder_donnees()
+            st.rerun()
+
+    st.divider()
+    voeux = st.session_state.app_data["parcoursup"]
+    a_supprimer = None
+
+    for v in voeux:
+        vid = v.get("id", str(uuid.uuid4()))
+        st.subheader(f"🎓 {v['voeu']}")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            v["projet_motive"] = st.checkbox("Projet Motivé", value=v["projet_motive"], key=f"pm_{vid}")
+        with c2:
+            v["pieces"] = st.checkbox("Pièces jointes OK", value=v["pieces"], key=f"pj_{vid}")
+        with c3:
+            v["confirme"] = st.checkbox("Confirmé ✔️", value=v["confirme"], key=f"conf_{vid}")
+        with c4:
+            if st.button("🗑️ Supprimer", key=f"del_p_{vid}"):
+                a_supprimer = v
+
+        st.divider()
+
+    if a_supprimer:
+        st.session_state.app_data["parcoursup"].remove(a_supprimer)
+        sauvegarder_donnees()
+        st.rerun()
+
+# --- 6. ESPACE GRAND ORAL ---
+elif menu == "🎤 Espace Grand Oral":
+    st.title("🎤 Préparation au Grand Oral")
+    go = st.session_state.app_data["grand_oral"]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("📌 Question 1")
+        go["q1_titre"] = st.text_input("Sujet Q1", value=go.get("q1_titre", ""))
+        go["q1_plan"] = st.text_area("Plan Q1", value=go.get("q1_plan", ""), height=150)
+    with c2:
+        st.subheader("📌 Question 2")
+        go["q2_titre"] = st.text_input("Sujet Q2", value=go.get("q2_titre", ""))
+        go["q2_plan"] = st.text_area("Plan Q2", value=go.get("q2_plan", ""), height=150)
+
+    if st.button("💾 Sauvegarder mes fiches Grand Oral"):
+        sauvegarder_donnees()
+        st.success("Fiches enregistrées !")
+
+    st.divider()
+    st.subheader("⏱️ Chronomètre officiel (20 minutes)")
+    if st.button("🚀 Démarrer la simulation (20 min)"):
+        total_sec_go = 20 * 60
+        barre_go = st.progress(0)
+        chrono_go = st.empty()
+        for s in range(total_sec_go, -1, -1):
+            m, sec = divmod(s, 60)
+            chrono_go.markdown(f"### ⏳ Temps restant : **{m:02d}:{sec:02d}**")
+            barre_go.progress((total_sec_go - s) / total_sec_go)
+            time.sleep(1)
+        chrono_go.markdown("### 🎉 **Temps écoulé !**")
+        st.balloons()
