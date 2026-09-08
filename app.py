@@ -1,11 +1,11 @@
 import streamlit as st
 import json
-import os
 import time
 import uuid
 from datetime import datetime, date, timedelta
 from PIL import Image
 import google.generativeai as genai
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(
     page_title="Mon Assistant de Terminale",
@@ -16,55 +16,69 @@ st.set_page_config(
 
 st.markdown('<html lang="fr"></html>', unsafe_allow_html=True)
 
-DATA_FILE = "devoirs_data.json"
+# --- STRUCTURE DE DÉFAUT ---
+STRUCTURE_DEFAUT = {
+    "devoirs": [],
+    "dossiers_matieres": {
+        "📐 Spé Maths": [],
+        "🧪 Spé Physique-Chimie": [],
+        "🔢 Option Maths Expertes": [],
+        "🧠 Philosophie": [],
+        "📜 Histoire-Géo": [],
+        "🔬 Enseignement Scientifique": [],
+        "🇬🇧 Anglais (LVA)": [],
+        "🇪🇸 Espagnol (LVB)": [],
+        "🏃 EPS": [],
+        "⚖️ EMC": [],
+        "🎓 Grand Oral": [],
+        "📝 Bac Blanc": [],
+        "📌 Autre": []
+    },
+    "parcoursup": [],
+    "grand_oral": {"q1_titre": "", "q1_plan": "", "q2_titre": "", "q2_plan": ""}
+}
 
-# --- CHARGEMENT & SAUVEGARDE ---
+# --- CONNEXION BASE DE DONNÉES GOOGLE SHEETS ---
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception:
+    conn = None
+
 def charger_donnees():
-    structure_defaut = {
-        "devoirs": [],
-        "dossiers_matieres": {
-            "📐 Spé Maths": [],
-            "🧪 Spé Physique-Chimie": [],
-            "🔢 Option Maths Expertes": [],
-            "🧠 Philosophie": [],
-            "📜 Histoire-Géo": [],
-            "🔬 Enseignement Scientifique": [],
-            "🇬🇧 Anglais (LVA)": [],
-            "🇪🇸 Espagnol (LVB)": [],
-            "🏃 EPS": [],
-            "⚖️ EMC": [],
-            "🎓 Grand Oral": [],
-            "📝 Bac Blanc": [],
-            "📌 Autre": []
-        },
-        "parcoursup": [],
-        "grand_oral": {"q1_titre": "", "q1_plan": "", "q2_titre": "", "q2_plan": ""}
-    }
+    """Charge les données depuis Google Sheets (ou structure par défaut en cas d'erreur)."""
+    if conn is None:
+        return STRUCTURE_DEFAUT.copy()
     
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    for cle in structure_defaut:
-                        if cle not in data:
-                            data[cle] = structure_defaut[cle]
-                    
-                    for v in data.get("parcoursup", []):
-                        if "id" not in v:
-                            v["id"] = str(uuid.uuid4())
-                            
-                    return data
-                elif isinstance(data, list):
-                    structure_defaut["devoirs"] = data
-                    return structure_defaut
-        except Exception:
-            return structure_defaut
-    return structure_defaut
+    try:
+        # On lit la cellule A1 où la chaîne JSON complète est stockée
+        df = conn.read(ttl=0)
+        if not df.empty and "data_json" in df.columns:
+            json_str = df["data_json"].iloc[0]
+            data = json.loads(json_str)
+            
+            # Vérification de la complétude du dictionnaire
+            for cle in STRUCTURE_DEFAUT:
+                if cle not in data:
+                    data[cle] = STRUCTURE_DEFAUT[cle]
+            for v in data.get("parcoursup", []):
+                if "id" not in v:
+                    v["id"] = str(uuid.uuid4())
+            return data
+    except Exception as e:
+        st.warning(f"Note : Chargement initial des données (Google Sheets) : {e}")
+    
+    return STRUCTURE_DEFAUT.copy()
 
 def sauvegarder_donnees():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(st.session_state.app_data, f, ensure_ascii=False, indent=4)
+    """Sauvegarde tout le dictionnaire app_data dans Google Sheets sous forme de chaîne JSON."""
+    if conn is not None:
+        try:
+            import pandas as pd
+            json_str = json.dumps(st.session_state.app_data, ensure_ascii=False, indent=2)
+            df = pd.DataFrame([{"data_json": json_str}])
+            conn.update(data=df)
+        except Exception as e:
+            st.error(f"Erreur lors de la sauvegarde sur Google Sheets : {e}")
 
 if "app_data" not in st.session_state:
     st.session_state.app_data = charger_donnees()
@@ -124,7 +138,6 @@ menu = st.sidebar.radio("Menu :", [
 st.sidebar.divider()
 st.sidebar.subheader("🔑 Clé API Gemini")
 
-# Récupère automatiquement la clé dans les Secrets de Streamlit s'il y en a une
 api_key = st.secrets.get("GEMINI_API_KEY") or st.sidebar.text_input("Colle ta clé API Gemini :", type="password", key="gemini_key")
 
 if st.secrets.get("GEMINI_API_KEY"):
@@ -295,7 +308,7 @@ elif menu == "📷 Importer Capture Pronote (IA Gemini)":
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         
-                        prompt = f"""
+                        prompt = """
                         Analyse cette capture Pronote pour un élève de Terminale.
                         1. Extrais le texte exact des devoirs ou cours sans doublons.
                         2. Respecte les limites de temps : max 2h30 par soir en semaine (avec 30 min de marge) et 3 à 4h le week-end.
